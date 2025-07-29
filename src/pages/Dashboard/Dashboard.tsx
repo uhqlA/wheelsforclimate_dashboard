@@ -48,7 +48,7 @@ const Route: React.FC = () => {
             />
           </svg>
         </CardDataStats>
-        <CardDataStats title="Distance to cover" total="KM 10,193" rate="2.59%">
+        <CardDataStats title="Distance to cover" total="KM 15,000" rate="2.59%">
           <svg
             className="fill-primary dark:fill-white"
             width="22"
