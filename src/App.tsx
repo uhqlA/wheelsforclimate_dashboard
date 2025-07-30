@@ -10,7 +10,7 @@ import Chart from './pages/Chart';
 import Dashboard from './pages/Dashboard/Dashboard';
 import FormElements from './pages/Form/FormElements';
 import FormLayout from './pages/Form/FormLayout';
-import Profile from './pages/Profile';
+import Activities from './pages/Activities';
 import Settings from './pages/Settings';
 import Tables from './pages/Tables';
 import Alerts from './pages/UiElements/Alerts';
@@ -53,11 +53,11 @@ function App() {
           }
         />
         <Route
-          path="/profile"
+          path="/activities"
           element={
             <>
               <PageTitle title="Activities" />
-              <Profile />
+              <Activities />
             </>
           }
         />
