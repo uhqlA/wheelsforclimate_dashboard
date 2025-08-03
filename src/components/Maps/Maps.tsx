@@ -24,6 +24,7 @@ import { Coordinate } from 'ol/coordinate';
 import Breadcrumb from '../Breadcrumbs/Breadcrumb';
 
 import routesGeoJSON from './routes'; // Adjust path as necessary
+import county_routes from './county_routes'; // Add this import for the county routes data
 
 type MapType = 'osm' | 'openstreet' | 'satellite' | 'terrain' | 'dark';
 
@@ -49,6 +50,8 @@ const MapComponent: React.FC = () => {
   const geoJsonLayerRef = useRef<VectorLayer<any> | null>(null);
   const routesSourceRef = useRef<VectorSource | null>(null);
   const routesLayerRef = useRef<VectorLayer<any> | null>(null);
+  const countyRoutesSourceRef = useRef<VectorSource | null>(null);
+  const countyRoutesLayerRef = useRef<VectorLayer<any> | null>(null);
   const overlayRef = useRef<Overlay | null>(null);
 
   const [currentMapType, setCurrentMapType] = useState<MapType>('osm');
@@ -180,6 +183,76 @@ const MapComponent: React.FC = () => {
     }
   };
 
+  // Add county routes to map
+  const addCountyRoutesToMap = () => {
+    if (!county_routes || !mapObj.current || !countyRoutesSourceRef.current)
+      return;
+
+    try {
+      const format = new GeoJSON();
+      const countyRouteFeatures = format.readFeatures(county_routes, {
+        featureProjection: 'EPSG:3857',
+        dataProjection: 'EPSG:4326',
+      });
+
+      // Clear existing county route features
+      countyRoutesSourceRef.current.clear();
+
+      // Style each county route feature
+      countyRouteFeatures.forEach((feature) => {
+        const featureType = feature.get('type');
+        let style;
+
+        if (featureType === 'starting_point') {
+          style = new Style({
+            image: new CircleStyle({
+              radius: 10,
+              fill: new Fill({ color: '#00ff00' }),
+              stroke: new Stroke({ color: '#fff', width: 2 }),
+            }),
+            text: new Text({
+              font: '12px Calibri,sans-serif',
+              fill: new Fill({ color: '#000' }),
+              stroke: new Stroke({ color: '#fff', width: 3 }),
+              offsetY: -25,
+            }),
+          });
+        } else {
+          style = new Style({
+            image: new CircleStyle({
+              radius: 8,
+              fill: new Fill({ color: '#ff6600' }),
+              stroke: new Stroke({ color: '#fff', width: 2 }),
+            }),
+            text: new Text({
+              font: '12px Calibri,sans-serif',
+              fill: new Fill({ color: '#000' }),
+              stroke: new Stroke({ color: '#fff', width: 3 }),
+              offsetY: -25,
+            }),
+          });
+        }
+
+        // Add feature name as text if available
+        const name = feature.get('name') || '';
+        if (name) {
+          style.getText()?.setText(name);
+        }
+
+        feature.setStyle(style);
+      });
+
+      // Add county route features
+      countyRoutesSourceRef.current.addFeatures(countyRouteFeatures);
+
+      console.log(
+        `Added ${countyRouteFeatures.length} county route features to map`,
+      );
+    } catch (err) {
+      console.error('Error adding county routes to map:', err);
+    }
+  };
+
   // Create style for GeoJSON features
   const createGeoJsonStyle = () => {
     return new Style({
@@ -249,6 +322,12 @@ const MapComponent: React.FC = () => {
         source: routesSourceRef.current,
       });
 
+      // Vector source for county routes
+      countyRoutesSourceRef.current = new VectorSource();
+      countyRoutesLayerRef.current = new VectorLayer({
+        source: countyRoutesSourceRef.current,
+      });
+
       // Create popup overlay
       overlayRef.current = new Overlay({
         element: popupRef.current,
@@ -267,6 +346,7 @@ const MapComponent: React.FC = () => {
         layers: [
           new TileLayer({ source: mapSources[currentMapType] }),
           routesLayerRef.current, // Routes layer (bottom)
+          countyRoutesLayerRef.current, // County routes layer
           geoJsonLayerRef.current, // GeoJSON layer (middle)
           vectorLayerRef.current, // Current location marker on top
         ],
@@ -282,8 +362,11 @@ const MapComponent: React.FC = () => {
         const feature = mapObj.current!.forEachFeatureAtPixel(
           event.pixel,
           (feature) => {
-            // Only handle GeoJSON features (not current location marker or routes)
-            if (geoJsonSourceRef.current?.hasFeature(feature)) {
+            // Handle GeoJSON features and county routes features
+            if (
+              geoJsonSourceRef.current?.hasFeature(feature) ||
+              countyRoutesSourceRef.current?.hasFeature(feature)
+            ) {
               return feature;
             }
             return null;
@@ -357,6 +440,9 @@ const MapComponent: React.FC = () => {
 
       // Add routes to map
       addRoutesToMap();
+
+      // Add county routes to map
+      addCountyRoutesToMap();
     }
 
     return () => {
