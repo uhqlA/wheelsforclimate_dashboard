@@ -6,7 +6,7 @@ const Route: React.FC = () => {
   return (
     <>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6 xl:grid-cols-4 2xl:gap-7.5">
-        <CardDataStats title="Start" total="Nairobi" rate="0.43%" levelUp>
+        <CardDataStats title="Start" total="Nairobi" rate="UNEP">
           <svg
             className="fill-primary dark:fill-white"
             width="22"
@@ -25,7 +25,7 @@ const Route: React.FC = () => {
             />
           </svg>
         </CardDataStats>
-        <CardDataStats title="Destination" total="Brazil" rate="4.35%" levelUp>
+        <CardDataStats title="Destination" total="Brazil" rate="Belém">
           <svg
             className="fill-primary dark:fill-white"
             width="22"
@@ -44,7 +44,7 @@ const Route: React.FC = () => {
             />
           </svg>
         </CardDataStats>
-        <CardDataStats title="Distance to cover" total="KM 15,000" rate="2.59%">
+        <CardDataStats title="Distance to cover" total="KM 15,000 +" rate="">
           <svg
             className="fill-primary dark:fill-white"
             width="22"
@@ -66,7 +66,7 @@ const Route: React.FC = () => {
         <CardDataStats
           title="Africa Countries to Cycle across"
           total="8"
-          rate="0.95%"
+          rate="8"
           // levelDown
         >
           <svg
