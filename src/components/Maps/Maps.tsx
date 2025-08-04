@@ -167,7 +167,7 @@ const MapComponent: React.FC = () => {
         feature.setStyle(
           new Style({
             stroke: new Stroke({
-              color: 'brown',
+              color: 'blue',
               width: 3,
             }),
           }),
