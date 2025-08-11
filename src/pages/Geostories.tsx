@@ -651,9 +651,9 @@ const GeoStoriesDashboard = () => {
               <AlertCircleIcon />
             </div>
             <h3 className="text-lg font-medium text-red-900 mb-2">
-              Error Loading Stories
+              No Stories found
             </h3>
-            <p className="text-red-700 mb-4">{error}</p>
+            {/* <p className="text-red-700 mb-4">{error}</p> */}
             <button
               onClick={() => fetchStories()}
               className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 transition-colors"
