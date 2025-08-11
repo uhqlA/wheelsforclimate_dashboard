@@ -87,13 +87,13 @@
 .flatpickr-months .flatpickr-next-month:hover svg {
   @apply !fill-primary;
 }
-.flatpickr-calendar.arrowTop:before {
+.flatpickr-geostories.arrowTop:before {
   @apply dark:!border-b-boxdark;
 }
-.flatpickr-calendar.arrowTop:after {
+.flatpickr-geostories.arrowTop:after {
   @apply dark:!border-b-boxdark;
 }
-.flatpickr-calendar {
+.flatpickr-geostories {
   @apply !p-6 dark:!bg-boxdark dark:!text-bodydark dark:!shadow-8 2xsm:!w-auto;
 }
 .flatpickr-day {
@@ -117,7 +117,9 @@ span.flatpickr-weekday,
 }
 .flatpickr-day.inRange {
   @apply dark:!shadow-7;
-  box-shadow: -5px 0 0 #EFF4FB, 5px 0 0 #EFF4FB;
+  box-shadow:
+    -5px 0 0 #eff4fb,
+    5px 0 0 #eff4fb;
 }
 .flatpickr-day.inRange,
 .flatpickr-day.prevMonthDay.inRange,
@@ -198,15 +200,15 @@ span.flatpickr-weekday,
   @apply bg-primary border-primary dark:border-primary;
 }
 
-.custom-input-date::-webkit-calendar-picker-indicator {
+.custom-input-date::-webkit-geostories-picker-indicator {
   background-position: center;
   background-repeat: no-repeat;
   background-size: 20px;
 }
-.custom-input-date-1::-webkit-calendar-picker-indicator {
-  background-image: url(./images/icon/icon-calendar.svg);
+.custom-input-date-1::-webkit-geostories-picker-indicator {
+  background-image: url(./images/icon/icon-geostories.svg);
 }
-.custom-input-date-2::-webkit-calendar-picker-indicator {
+.custom-input-date-2::-webkit-geostories-picker-indicator {
   background-image: url(./images/icon/icon-arrow-down.svg);
 }
 

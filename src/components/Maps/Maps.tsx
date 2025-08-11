@@ -65,7 +65,7 @@ const MapComponent: React.FC = () => {
   const [apiDataLoaded, setApiDataLoaded] = useState(false);
   const [selectedFeature, setSelectedFeature] =
     useState<SelectedFeature | null>(null);
-  const [popupPosition, setPopupPosition] = useState<Coordinate | null>(null);
+  // const [popupPosition, setPopupPosition] = useState<Coordinate | null>(null);
 
   // Define base map sources
   const mapSources = {
@@ -76,12 +76,12 @@ const MapComponent: React.FC = () => {
     satellite: new XYZ({
       url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     }),
-    terrain: new XYZ({
-      url: 'https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg',
-      attributions:
-        'Map tiles by <a href="http://stamen.com">Stamen Design</a>, ' +
-        '<a href="http://openstreetmap.org">OpenStreetMap</a> contributors',
-    }),
+    // terrain: new XYZ({
+    //   url: 'https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg',
+    //   attributions:
+    //     'Map tiles by <a href="http://stamen.com">Stamen Design</a>, ' +
+    //     '<a href="http://openstreetmap.org">OpenStreetMap</a> contributors',
+    // }),
     dark: new XYZ({
       url: 'https://{a-c}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
     }),

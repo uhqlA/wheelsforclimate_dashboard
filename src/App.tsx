@@ -5,7 +5,7 @@ import Loader from './common/Loader';
 import PageTitle from './components/PageTitle';
 import SignIn from './pages/Authentication/SignIn';
 import SignUp from './pages/Authentication/SignUp';
-import Calendar from './pages/Calendar';
+import Geostories from './pages/Geostories';
 import Chart from './pages/Chart';
 import Dashboard from './pages/Dashboard/Dashboard';
 import FormElements from './pages/Form/FormElements';
@@ -44,11 +44,11 @@ function App() {
           }
         />
         <Route
-          path="/calendar"
+          path="/geostories"
           element={
             <>
-              <PageTitle title="Calendar" />
-              <Calendar />
+              <PageTitle title="geostories" />
+              <Geostories />
             </>
           }
         />
