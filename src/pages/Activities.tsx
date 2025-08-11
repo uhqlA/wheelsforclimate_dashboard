@@ -27,15 +27,38 @@ import routesGeoJSON from '../components/Data/Daystar_route'; // Adjust path as 
 
 type MapType = 'osm' | 'openstreet' | 'satellite' | 'terrain' | 'dark';
 
-interface GeoJSONData {
-  type: string;
-  features: any[];
+interface DailyRecapData {
+  id: string;
+  latitude: string;
+  longitude: string;
+  date: string;
+  country: string;
+  mood_emoji: string;
+  distance_covered: string;
+  average_speed: string;
+  cycling_hours: string;
+  breakdowns_encountered: number;
+  number_of_breakdowns: number;
+  charging_stops: number;
+  elevation_gains: number;
+  road_quality: number;
+  total_people_interacted: number;
+  community_events: number;
+  women_reached: number;
+  youth_reached: number;
+  marginalized_persons: number;
+  community_feedback_score: number;
+  climate_messages: number;
+  public_messaging_reach: number;
+  audience_questions: number;
+  [key: string]: any; // Allow for additional properties
 }
 
 interface SelectedFeature {
-  properties: { [key: string]: any };
+  properties: DailyRecapData;
   coordinates: [number, number];
   geometry: any;
+  source: 'daily-recaps'; // Track the source of the feature
 }
 
 const MapComponent: React.FC = () => {
@@ -45,8 +68,8 @@ const MapComponent: React.FC = () => {
   const mapObj = useRef<Map | null>(null);
   const vectorSourceRef = useRef<VectorSource | null>(null);
   const vectorLayerRef = useRef<VectorLayer<any> | null>(null);
-  const geoJsonSourceRef = useRef<VectorSource | null>(null);
-  const geoJsonLayerRef = useRef<VectorLayer<any> | null>(null);
+  const dailyRecapsSourceRef = useRef<VectorSource | null>(null);
+  const dailyRecapsLayerRef = useRef<VectorLayer<any> | null>(null);
   const routesSourceRef = useRef<VectorSource | null>(null);
   const routesLayerRef = useRef<VectorLayer<any> | null>(null);
   const overlayRef = useRef<Overlay | null>(null);
@@ -54,12 +77,11 @@ const MapComponent: React.FC = () => {
   const [currentMapType, setCurrentMapType] = useState<MapType>('osm');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showLayersMenu, setShowLayersMenu] = useState(false);
-  const [showApiLayer, setShowApiLayer] = useState(true);
-  const [geoJsonData, setGeoJsonData] = useState<GeoJSONData | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [apiError, setApiError] = useState<string | null>(null);
-  const [apiDataLoaded, setApiDataLoaded] = useState(false);
+  const [showDailyRecapsLayer, setShowDailyRecapsLayer] = useState(true);
+  const [dailyRecapsData, setDailyRecapsData] = useState<DailyRecapData[]>([]);
+  const [isDailyRecapsLoading, setIsDailyRecapsLoading] = useState(false);
+  const [dailyRecapsError, setDailyRecapsError] = useState<string | null>(null);
+  const [dailyRecapsLoaded, setDailyRecapsLoaded] = useState(false);
   const [selectedFeature, setSelectedFeature] =
     useState<SelectedFeature | null>(null);
   const [popupPosition, setPopupPosition] = useState<Coordinate | null>(null);
@@ -81,64 +103,79 @@ const MapComponent: React.FC = () => {
     }),
   };
 
-  // Fetch GeoJSON data from API
-  const fetchGeoJsonData = async () => {
-    setIsLoading(true);
-    setError(null);
-    setApiError(null);
-    setApiDataLoaded(false);
+  // Fetch Daily Recaps data from API
+  const fetchDailyRecapsData = async () => {
+    setIsDailyRecapsLoading(true);
+    setDailyRecapsError(null);
+    setDailyRecapsLoaded(false);
     try {
-      const response = await fetch(
-        'http://127.0.0.1:8000/api/rest_places_coordinates/geojson/',
-      );
+      const response = await fetch('http://127.0.0.1:8000/api/daily-recaps/');
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      const data: GeoJSONData = await response.json();
-      setGeoJsonData(data);
-      setApiDataLoaded(true);
-      console.log('GeoJSON data loaded:', data);
+      const data = await response.json();
+      setDailyRecapsData(data.results);
+      setDailyRecapsLoaded(true);
+      console.log('Daily Recaps data loaded:', data.results);
     } catch (err) {
       const errorMessage =
-        err instanceof Error ? err.message : 'Failed to fetch data';
-      setError(errorMessage);
-      setApiError(errorMessage);
-      console.error('Error fetching GeoJSON data:', err);
+        err instanceof Error
+          ? err.message
+          : 'Failed to fetch daily recaps data';
+      setDailyRecapsError(errorMessage);
+      console.error('Error fetching Daily Recaps data:', err);
     } finally {
-      setIsLoading(false);
+      setIsDailyRecapsLoading(false);
     }
   };
 
-  // Add GeoJSON features to map
-  const addGeoJsonToMap = () => {
-    if (!geoJsonData || !mapObj.current || !geoJsonSourceRef.current) return;
+  // Add Daily Recaps data to map
+  const addDailyRecapsToMap = () => {
+    if (!dailyRecapsData || !mapObj.current || !dailyRecapsSourceRef.current)
+      return;
 
     try {
-      const format = new GeoJSON();
-      const features = format.readFeatures(geoJsonData, {
-        featureProjection: 'EPSG:3857', // Web Mercator projection
-        dataProjection: 'EPSG:4326', // WGS84 (lat/lon)
-      });
-
       // Clear existing features
-      geoJsonSourceRef.current.clear();
+      dailyRecapsSourceRef.current.clear();
 
-      // Add new features
-      geoJsonSourceRef.current.addFeatures(features);
+      const features = dailyRecapsData
+        .map((recap, index) => {
+          if (!recap.latitude || !recap.longitude) {
+            console.warn(`Daily recap ${index} missing coordinates:`, recap);
+            return null;
+          }
 
-      // Fit view to show all features if there are any
+          const coords = fromLonLat([
+            parseFloat(recap.longitude),
+            parseFloat(recap.latitude),
+          ]);
+          const feature = new Feature({
+            geometry: new Point(coords),
+            ...recap, // Include all recap properties
+            dataSource: 'daily-recaps',
+            originalIndex: index,
+          });
+
+          return feature;
+        })
+        .filter((feature) => feature !== null);
+
+      // Add features to the source
+      dailyRecapsSourceRef.current.addFeatures(features);
+
+      console.log(`Added ${features.length} daily recap features to map`);
+
+      // Fit view to show all features if this is the first time loading
       if (features.length > 0) {
-        const extent = geoJsonSourceRef.current.getExtent();
+        const extent = dailyRecapsSourceRef.current.getExtent();
         mapObj.current.getView().fit(extent, {
           padding: [50, 50, 50, 50],
           maxZoom: 16,
         });
       }
-
-      console.log(`Added ${features.length} features to map`);
     } catch (err) {
-      console.error('Error adding GeoJSON to map:', err);
-      setError('Error processing GeoJSON data');
+      console.error('Error adding Daily Recaps to map:', err);
+      setDailyRecapsError('Error processing Daily Recaps data');
     }
   };
 
@@ -177,21 +214,19 @@ const MapComponent: React.FC = () => {
     }
   };
 
-  // Create style for GeoJSON features
-  const createGeoJsonStyle = () => {
+  // Create style for Daily Recaps features
+  const createDailyRecapsStyle = () => {
     return new Style({
       image: new CircleStyle({
-        radius: 8,
-        fill: new Fill({ color: '#6B8E23' }),
+        radius: 10,
+        fill: new Fill({ color: '#FF4500' }), // Orange color
         stroke: new Stroke({ color: '#fff', width: 2 }),
       }),
-      fill: new Fill({ color: 'rgba(255, 107, 107, 0.3)' }),
-      stroke: new Stroke({ color: '#ff6b6b', width: 2 }),
       text: new Text({
         font: '12px Calibri,sans-serif',
         fill: new Fill({ color: '#000' }),
         stroke: new Stroke({ color: '#fff', width: 3 }),
-        offsetY: -25,
+        offsetY: -30,
       }),
     });
   };
@@ -208,12 +243,12 @@ const MapComponent: React.FC = () => {
     };
   }, []);
 
-  // Toggle API layer visibility
+  // Toggle Daily Recaps layer visibility
   useEffect(() => {
-    if (geoJsonLayerRef.current) {
-      geoJsonLayerRef.current.setVisible(showApiLayer);
+    if (dailyRecapsLayerRef.current) {
+      dailyRecapsLayerRef.current.setVisible(showDailyRecapsLayer);
     }
-  }, [showApiLayer]);
+  }, [showDailyRecapsLayer]);
 
   // Initialize map
   useEffect(() => {
@@ -224,17 +259,18 @@ const MapComponent: React.FC = () => {
         source: vectorSourceRef.current,
       });
 
-      // Vector source for GeoJSON data
-      geoJsonSourceRef.current = new VectorSource();
-      geoJsonLayerRef.current = new VectorLayer({
-        source: geoJsonSourceRef.current,
-        visible: showApiLayer,
+      // Vector source for Daily Recaps data
+      dailyRecapsSourceRef.current = new VectorSource();
+      dailyRecapsLayerRef.current = new VectorLayer({
+        source: dailyRecapsSourceRef.current,
+        visible: showDailyRecapsLayer,
         style: (feature) => {
-          const style = createGeoJsonStyle();
-          // Add feature name as text if available
-          const name = feature.get('name') || feature.get('title') || '';
-          if (name) {
-            style.getText()?.setText(name);
+          const style = createDailyRecapsStyle();
+          // Add feature identifier as text if available
+          const text =
+            feature.get('date') || `Recap ${feature.get('id') || ''}`;
+          if (text) {
+            style.getText()?.setText(text.toString());
           }
           return style;
         },
@@ -264,7 +300,7 @@ const MapComponent: React.FC = () => {
         layers: [
           new TileLayer({ source: mapSources[currentMapType] }),
           routesLayerRef.current, // Routes layer (bottom)
-          geoJsonLayerRef.current, // GeoJSON layer (middle)
+          dailyRecapsLayerRef.current, // Daily Recaps layer
           vectorLayerRef.current, // Current location marker on top
         ],
         overlays: [overlayRef.current],
@@ -279,8 +315,7 @@ const MapComponent: React.FC = () => {
         const feature = mapObj.current!.forEachFeatureAtPixel(
           event.pixel,
           (feature) => {
-            // Only handle GeoJSON features (not current location marker or routes)
-            if (geoJsonSourceRef.current?.hasFeature(feature)) {
+            if (dailyRecapsSourceRef.current?.hasFeature(feature)) {
               return feature;
             }
             return null;
@@ -295,19 +330,17 @@ const MapComponent: React.FC = () => {
           const cleanProperties = { ...properties };
           delete cleanProperties.geometry;
 
-          let coordinates: [number, number];
-
+          let coordinates: [number, number] = [0, 0];
           if (geometry instanceof Point) {
             const coords = geometry.getCoordinates();
             coordinates = toLonLat(coords) as [number, number];
-          } else {
-            coordinates = [0, 0]; // fallback
           }
 
           setSelectedFeature({
             properties: cleanProperties,
             coordinates,
             geometry: geometry,
+            source: 'daily-recaps',
           });
 
           setPopupPosition(event.coordinate);
@@ -333,7 +366,6 @@ const MapComponent: React.FC = () => {
             marker.setStyle(
               new Style({
                 image: new Icon({
-                  // src: 'https://cdn-icons-png.flaticon.com/512/64/64113.png',
                   src: 'https://img.icons8.com/emoji/512w/person-biking.png',
                   scale: 0.25,
                 }),
@@ -341,8 +373,8 @@ const MapComponent: React.FC = () => {
             );
 
             vectorSourceRef.current?.addFeature(marker);
-            // Don't automatically center on current location if we have GeoJSON data
-            if (!geoJsonData) {
+            // Don't automatically center on current location if we have other data
+            if (!dailyRecapsData.length) {
               mapObj.current?.getView().animate({ center: coords, zoom: 14 });
             }
           },
@@ -350,8 +382,8 @@ const MapComponent: React.FC = () => {
         );
       }
 
-      // Fetch GeoJSON data on map initialization
-      fetchGeoJsonData();
+      // Fetch API data on map initialization
+      fetchDailyRecapsData();
 
       // Add routes to map
       addRoutesToMap();
@@ -363,12 +395,25 @@ const MapComponent: React.FC = () => {
     };
   }, []);
 
-  // Add GeoJSON data to map when it's loaded
+  // Add Daily Recaps data to map when it's loaded
   useEffect(() => {
-    if (geoJsonData && mapObj.current) {
-      addGeoJsonToMap();
+    if (dailyRecapsData.length > 0 && mapObj.current) {
+      addDailyRecapsToMap();
     }
-  }, [geoJsonData]);
+  }, [dailyRecapsData]);
+
+  // Fit map to show all data when dataset is loaded
+  useEffect(() => {
+    if (mapObj.current && dailyRecapsData.length > 0) {
+      const extent = dailyRecapsSourceRef.current?.getExtent();
+      if (extent) {
+        mapObj.current.getView().fit(extent, {
+          padding: [50, 50, 50, 50],
+          maxZoom: 16,
+        });
+      }
+    }
+  }, [dailyRecapsData]);
 
   // Change basemap source when selected
   useEffect(() => {
@@ -399,7 +444,7 @@ const MapComponent: React.FC = () => {
   };
 
   const refreshData = () => {
-    fetchGeoJsonData();
+    fetchDailyRecapsData();
   };
 
   const closePopup = () => {
@@ -454,6 +499,88 @@ const MapComponent: React.FC = () => {
     return key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
   };
 
+  // Function to render data cards for the selected feature
+  const renderDataCards = () => {
+    if (!selectedFeature) return null;
+
+    const recap = selectedFeature.properties;
+    const metrics = [
+      {
+        title: 'Cycling Metrics',
+        items: [
+          { label: 'Distance Covered (km)', value: recap.distance_covered },
+          { label: 'Average Speed (km/h)', value: recap.average_speed },
+          { label: 'Cycling Hours', value: recap.cycling_hours },
+          { label: 'Elevation Gains', value: recap.elevation_gains },
+          { label: 'Road Quality (1-5)', value: recap.road_quality },
+        ],
+      },
+      {
+        title: 'Community Engagement',
+        items: [
+          { label: 'People Interacted', value: recap.total_people_interacted },
+          { label: 'Community Events', value: recap.community_events },
+          { label: 'Women Reached', value: recap.women_reached },
+          { label: 'Youth Reached', value: recap.youth_reached },
+          { label: 'Marginalized Persons', value: recap.marginalized_persons },
+          {
+            label: 'Feedback Score (1-5)',
+            value: recap.community_feedback_score,
+          },
+        ],
+      },
+      {
+        title: 'Climate Messaging',
+        items: [
+          { label: 'Climate Messages', value: recap.climate_messages },
+          {
+            label: 'Public Messaging Reach',
+            value: recap.public_messaging_reach,
+          },
+          { label: 'Audience Questions', value: recap.audience_questions },
+        ],
+      },
+      {
+        title: 'Equipment & Logistics',
+        items: [
+          {
+            label: 'Breakdowns Encountered',
+            value: recap.breakdowns_encountered,
+          },
+          { label: 'Number of Breakdowns', value: recap.number_of_breakdowns },
+          { label: 'Charging Stops', value: recap.charging_stops },
+        ],
+      },
+    ];
+
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        {metrics.map((metric, index) => (
+          <div
+            key={index}
+            className="bg-white dark:bg-gray-800 rounded-lg shadow p-4"
+          >
+            <h4 className="font-bold text-lg mb-2 text-blue-600 dark:text-blue-400">
+              {metric.title}
+            </h4>
+            <div className="space-y-2">
+              {metric.items.map((item, idx) => (
+                <div key={idx} className="flex justify-between">
+                  <span className="text-gray-600 dark:text-gray-300">
+                    {item.label}:
+                  </span>
+                  <span className="font-medium text-gray-800 dark:text-gray-100">
+                    {item.value || 'N/A'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <>
       <Breadcrumb pageName="Activities" />
@@ -465,29 +592,24 @@ const MapComponent: React.FC = () => {
               Route Map: From DayStar Nairobi Campus, Valley Road to DayStar
               Main Campus Athiriver
             </h2>
-            {/* {isLoading && (
+            {isDailyRecapsLoading && (
               <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
                 <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-500 border-t-transparent"></div>
                 Loading data...
               </div>
-            )} */}
-            {/* {error && (
-              <div className="text-sm text-red-600 dark:text-red-400">
-                Error: {error}
+            )}
+            {dailyRecapsData.length > 0 && !isDailyRecapsLoading && (
+              <div className="text-sm text-green-600 dark:text-green-400">
+                {dailyRecapsData.length} locations loaded
               </div>
             )}
-            {geoJsonData && !isLoading && (
-              <div className="text-sm text-green-600 dark:text-green-400">
-                {geoJsonData.features?.length || 0} places loaded
-              </div>
-            )} */}
           </div>
           <button
             onClick={refreshData}
             className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md text-sm transition-colors"
-            disabled={isLoading}
+            disabled={isDailyRecapsLoading}
           >
-            {isLoading ? 'Loading...' : 'Refresh Data'}
+            {isDailyRecapsLoading ? 'Loading...' : 'Refresh Data'}
           </button>
         </div>
       </div>
@@ -553,7 +675,7 @@ const MapComponent: React.FC = () => {
                 padding: '10px',
                 borderRadius: '8px',
                 boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-                minWidth: '160px',
+                minWidth: '200px',
               }}
             >
               {/* Base Map Types */}
@@ -600,8 +722,10 @@ const MapComponent: React.FC = () => {
                     fontWeight: 'bold',
                   }}
                 >
-                  Layers
+                  Data Layers
                 </h4>
+
+                {/* Daily Recaps Layer */}
                 <div style={{ marginBottom: '8px' }}>
                   <label
                     style={{
@@ -613,37 +737,37 @@ const MapComponent: React.FC = () => {
                   >
                     <input
                       type="checkbox"
-                      checked={showApiLayer}
-                      onChange={(e) => setShowApiLayer(e.target.checked)}
-                      style={{ marginRight: '5px' }}
+                      checked={showDailyRecapsLayer}
+                      onChange={(e) =>
+                        setShowDailyRecapsLayer(e.target.checked)
+                      }
                     />
-                    Show API Layer
+                    Daily Recaps
+                    <span
+                      style={{
+                        backgroundColor: '#FF4500',
+                        width: '12px',
+                        height: '12px',
+                        borderRadius: '50%',
+                        border: '1px solid #fff',
+                      }}
+                    ></span>
                   </label>
                 </div>
 
-                {/* API Status Indicators */}
-                {apiError && (
-                  <div
-                    style={{
-                      fontSize: '12px',
-                      color: '#dc2626',
-                      marginTop: '5px',
-                    }}
-                  >
-                    Error: {apiError}
-                  </div>
-                )}
-                {apiDataLoaded && (
-                  <div
-                    style={{
-                      fontSize: '12px',
-                      color: '#16a34a',
-                      marginTop: '5px',
-                    }}
-                  >
-                    ✓ API data loaded
-                  </div>
-                )}
+                {/* Status Indicators */}
+                <div style={{ marginTop: '10px', fontSize: '12px' }}>
+                  {dailyRecapsError && (
+                    <div style={{ color: '#dc2626', marginBottom: '5px' }}>
+                      Daily Recaps Error: {dailyRecapsError}
+                    </div>
+                  )}
+                  {dailyRecapsLoaded && (
+                    <div style={{ color: '#16a34a' }}>
+                      ✓ Daily Recaps loaded ({dailyRecapsData.length})
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -665,12 +789,12 @@ const MapComponent: React.FC = () => {
             display: selectedFeature ? 'block' : 'none',
             position: 'absolute',
             background: 'white',
-            border: '2px solid #3b82f6',
+            border: '2px solid #FF4500',
             borderRadius: '8px',
             padding: '16px',
             minWidth: '300px',
-            maxWidth: '400px',
-            maxHeight: '60vh',
+            maxWidth: '600px',
+            maxHeight: '80vh',
             overflowY: 'auto',
             boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
             fontSize: '14px',
@@ -690,21 +814,39 @@ const MapComponent: React.FC = () => {
                   paddingBottom: '8px',
                 }}
               >
-                <h3
-                  style={{
-                    margin: 0,
-                    color: '#1f2937',
-                    fontSize: '16px',
-                    fontWeight: '600',
-                    maxWidth: '250px',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {selectedFeature.properties.name ||
-                    selectedFeature.properties.title ||
-                    selectedFeature.properties.label ||
-                    'Place Details'}
-                </h3>
+                <div>
+                  <h3
+                    style={{
+                      margin: 0,
+                      color: '#1f2937',
+                      fontSize: '18px',
+                      fontWeight: '600',
+                      maxWidth: '250px',
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {selectedFeature.properties.date} -{' '}
+                    {selectedFeature.properties.country}
+                  </h3>
+                  <div
+                    style={{
+                      fontSize: '24px',
+                      marginTop: '4px',
+                    }}
+                  >
+                    {selectedFeature.properties.mood_emoji}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '12px',
+                      color: '#FF4500',
+                      fontWeight: '500',
+                      marginTop: '2px',
+                    }}
+                  >
+                    Daily Recap
+                  </div>
+                </div>
                 <button
                   onClick={closePopup}
                   style={{
@@ -747,73 +889,8 @@ const MapComponent: React.FC = () => {
                 {selectedFeature.coordinates[0].toFixed(6)}
               </div>
 
-              {/* Properties */}
-              <div>
-                {Object.entries(selectedFeature.properties)
-                  .filter(
-                    ([key, value]) =>
-                      key !== 'name' &&
-                      key !== 'title' &&
-                      key !== 'label' &&
-                      value !== null &&
-                      value !== undefined &&
-                      value !== '',
-                  )
-                  .map(([key, value]) => (
-                    <div
-                      key={key}
-                      style={{
-                        marginBottom: '8px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '2px',
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontWeight: '600',
-                          color: '#374151',
-                          fontSize: '12px',
-                          textTransform: 'capitalize',
-                        }}
-                      >
-                        {formatPropertyKey(key)}:
-                      </span>
-                      <span
-                        style={{
-                          color: '#6b7280',
-                          wordBreak: 'break-word',
-                          fontSize: '13px',
-                          paddingLeft: '8px',
-                          lineHeight: '1.4',
-                        }}
-                      >
-                        {formatPropertyValue(key, value)}
-                      </span>
-                    </div>
-                  ))}
-
-                {Object.keys(selectedFeature.properties).filter(
-                  (key) =>
-                    key !== 'name' &&
-                    key !== 'title' &&
-                    key !== 'label' &&
-                    selectedFeature.properties[key] !== null &&
-                    selectedFeature.properties[key] !== undefined &&
-                    selectedFeature.properties[key] !== '',
-                ).length === 0 && (
-                  <div
-                    style={{
-                      color: '#6b7280',
-                      fontStyle: 'italic',
-                      textAlign: 'center',
-                      padding: '12px',
-                    }}
-                  >
-                    No additional details available
-                  </div>
-                )}
-              </div>
+              {/* Data Cards */}
+              {renderDataCards()}
             </>
           )}
         </div>
