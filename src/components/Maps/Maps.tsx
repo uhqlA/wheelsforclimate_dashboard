@@ -419,8 +419,8 @@ const MapComponent: React.FC = () => {
             marker.setStyle(
               new Style({
                 image: new Icon({
-                  src: 'https://cdn-icons-png.flaticon.com/512/64/64113.png',
-                  scale: 0.05,
+                  src: 'https://img.icons8.com/emoji/512w/person-biking.png',
+                  scale: 0.25,
                 }),
               }),
             );
@@ -428,7 +428,7 @@ const MapComponent: React.FC = () => {
             vectorSourceRef.current?.addFeature(marker);
             // Don't automatically center on current location if we have GeoJSON data
             if (!geoJsonData) {
-              mapObj.current?.getView().animate({ center: coords, zoom: 14 });
+              mapObj.current?.getView().animate({ center: coords, zoom: 17 });
             }
           },
           (err) => console.error('Geolocation error:', err),
