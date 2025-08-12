@@ -419,8 +419,8 @@ const MapComponent: React.FC = () => {
             marker.setStyle(
               new Style({
                 image: new Icon({
-                  src: 'https://img.icons8.com/emoji/512w/person-biking.png',
-                  scale: 0.25,
+                  src: 'https://cdn-icons-png.flaticon.com/512/2362/2362465.png',
+                  scale: 0.1,
                 }),
               }),
             );
