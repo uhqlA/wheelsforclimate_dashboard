@@ -28,12 +28,11 @@ import routesGeoJSON from '../components/Data/Daystar_route'; // Adjust path as 
 type MapType = 'osm' | 'openstreet' | 'satellite' | 'terrain' | 'dark';
 
 interface DailyRecapData {
-  id: string;
-  latitude: string;
-  longitude: string;
+  id?: string;
   date: string;
   country: string;
-  mood_emoji: string;
+  latitude: number;
+  longitude: number;
   distance_covered: string;
   average_speed: string;
   cycling_hours: string;
@@ -51,14 +50,51 @@ interface DailyRecapData {
   climate_messages: number;
   public_messaging_reach: number;
   audience_questions: number;
-  [key: string]: any; // Allow for additional properties
+  educational_media: number;
+  interviews: number;
+  photos_videos: number;
+  visible_emissions: number;
+  plastic_hotspots: number;
+  nature_sites: number;
+  climate_innovations: number;
+  ebikes_in_use: number;
+  power_station_eb70: number;
+  power_station_ac180p: number;
+  power_station_pv350: number;
+  power_station_p200_75w: number;
+  charging_mode: string[];
+  average_battery_use: string;
+  equipment_breakdowns: boolean;
+  equipment_breakdown_count: number;
+  riders_today: number;
+  team_health_score: number;
+  hydration_check: string;
+  injuries_accidents: boolean;
+  injury_description: string;
+  team_mood: number;
+  instagram_posts: number;
+  tiktok_videos: number;
+  linkedin_mentions: number;
+  newsletter_mentions: boolean;
+  media_contacts: number;
+  [key: string]: any;
 }
 
 interface SelectedFeature {
-  properties: DailyRecapData;
+  properties: { [key: string]: any };
   coordinates: [number, number];
   geometry: any;
-  source: 'daily-recaps'; // Track the source of the feature
+}
+
+interface StatsData {
+  total_recaps: number;
+  total_distance: number;
+  avg_speed: number;
+  total_people_reached: number;
+  total_women_reached: number;
+  total_youth_reached: number;
+  avg_team_mood: number;
+  avg_road_quality: number;
 }
 
 const MapComponent: React.FC = () => {
@@ -85,6 +121,7 @@ const MapComponent: React.FC = () => {
   const [selectedFeature, setSelectedFeature] =
     useState<SelectedFeature | null>(null);
   const [popupPosition, setPopupPosition] = useState<Coordinate | null>(null);
+  const [stats, setStats] = useState<StatsData | null>(null);
 
   // Define base map sources
   const mapSources = {
@@ -114,9 +151,11 @@ const MapComponent: React.FC = () => {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       const data = await response.json();
-      setDailyRecapsData(data.results);
+      // Handle paginated response
+      const results = data.results || data;
+      setDailyRecapsData(Array.isArray(results) ? results : []);
       setDailyRecapsLoaded(true);
-      console.log('Daily Recaps data loaded:', data.results);
+      console.log('Daily Recaps data loaded:', results);
     } catch (err) {
       const errorMessage =
         err instanceof Error
@@ -126,6 +165,23 @@ const MapComponent: React.FC = () => {
       console.error('Error fetching Daily Recaps data:', err);
     } finally {
       setIsDailyRecapsLoading(false);
+    }
+  };
+
+  // Fetch statistics data
+  const fetchStats = async () => {
+    try {
+      const response = await fetch(
+        'http://127.0.0.1:8000/api/daily-recaps/stats/',
+      );
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const statsData = await response.json();
+      setStats(statsData);
+      console.log('Stats data loaded:', statsData);
+    } catch (err) {
+      console.error('Error fetching stats:', err);
     }
   };
 
@@ -145,14 +201,10 @@ const MapComponent: React.FC = () => {
             return null;
           }
 
-          const coords = fromLonLat([
-            parseFloat(recap.longitude),
-            parseFloat(recap.latitude),
-          ]);
+          const coords = fromLonLat([recap.longitude, recap.latitude]);
           const feature = new Feature({
             geometry: new Point(coords),
-            ...recap, // Include all recap properties
-            dataSource: 'daily-recaps',
+            ...recap,
             originalIndex: index,
           });
 
@@ -165,7 +217,7 @@ const MapComponent: React.FC = () => {
 
       console.log(`Added ${features.length} daily recap features to map`);
 
-      // Fit view to show all features if this is the first time loading
+      // Fit view to show all features
       if (features.length > 0) {
         const extent = dailyRecapsSourceRef.current.getExtent();
         mapObj.current.getView().fit(extent, {
@@ -198,7 +250,7 @@ const MapComponent: React.FC = () => {
         feature.setStyle(
           new Style({
             stroke: new Stroke({
-              color: 'blue',
+              color: '#3B82F6',
               width: 4,
             }),
           }),
@@ -218,15 +270,15 @@ const MapComponent: React.FC = () => {
   const createDailyRecapsStyle = () => {
     return new Style({
       image: new CircleStyle({
-        radius: 10,
-        fill: new Fill({ color: '#FF4500' }), // Orange color
-        stroke: new Stroke({ color: '#fff', width: 2 }),
+        radius: 12,
+        fill: new Fill({ color: '#FF4500' }),
+        stroke: new Stroke({ color: '#fff', width: 3 }),
       }),
       text: new Text({
         font: '12px Calibri,sans-serif',
         fill: new Fill({ color: '#000' }),
         stroke: new Stroke({ color: '#fff', width: 3 }),
-        offsetY: -30,
+        offsetY: -35,
       }),
     });
   };
@@ -266,9 +318,7 @@ const MapComponent: React.FC = () => {
         visible: showDailyRecapsLayer,
         style: (feature) => {
           const style = createDailyRecapsStyle();
-          // Add feature identifier as text if available
-          const text =
-            feature.get('date') || `Recap ${feature.get('id') || ''}`;
+          const text = `${feature.get('country')} - ${feature.get('date')}`;
           if (text) {
             style.getText()?.setText(text.toString());
           }
@@ -299,13 +349,13 @@ const MapComponent: React.FC = () => {
         target: mapRef.current,
         layers: [
           new TileLayer({ source: mapSources[currentMapType] }),
-          routesLayerRef.current, // Routes layer (bottom)
-          dailyRecapsLayerRef.current, // Daily Recaps layer
-          vectorLayerRef.current, // Current location marker on top
+          routesLayerRef.current,
+          dailyRecapsLayerRef.current,
+          vectorLayerRef.current,
         ],
         overlays: [overlayRef.current],
         view: new View({
-          center: fromLonLat([36.8219, -1.2921]), // Default center (Nairobi)
+          center: fromLonLat([36.8219, -1.2921]),
           zoom: 10,
         }),
       });
@@ -330,23 +380,24 @@ const MapComponent: React.FC = () => {
           const cleanProperties = { ...properties };
           delete cleanProperties.geometry;
 
-          let coordinates: [number, number] = [0, 0];
+          let coordinates: [number, number];
+
           if (geometry instanceof Point) {
             const coords = geometry.getCoordinates();
             coordinates = toLonLat(coords) as [number, number];
+          } else {
+            coordinates = [0, 0];
           }
 
           setSelectedFeature({
             properties: cleanProperties,
             coordinates,
             geometry: geometry,
-            source: 'daily-recaps',
           });
 
           setPopupPosition(event.coordinate);
           overlayRef.current?.setPosition(event.coordinate);
         } else {
-          // Close popup when clicking elsewhere
           closePopup();
         }
       });
@@ -373,19 +424,14 @@ const MapComponent: React.FC = () => {
             );
 
             vectorSourceRef.current?.addFeature(marker);
-            // Don't automatically center on current location if we have other data
-            if (!dailyRecapsData.length) {
-              mapObj.current?.getView().animate({ center: coords, zoom: 14 });
-            }
           },
           (err) => console.error('Geolocation error:', err),
         );
       }
 
-      // Fetch API data on map initialization
+      // Fetch data on map initialization
       fetchDailyRecapsData();
-
-      // Add routes to map
+      fetchStats();
       addRoutesToMap();
     }
 
@@ -399,19 +445,6 @@ const MapComponent: React.FC = () => {
   useEffect(() => {
     if (dailyRecapsData.length > 0 && mapObj.current) {
       addDailyRecapsToMap();
-    }
-  }, [dailyRecapsData]);
-
-  // Fit map to show all data when dataset is loaded
-  useEffect(() => {
-    if (mapObj.current && dailyRecapsData.length > 0) {
-      const extent = dailyRecapsSourceRef.current?.getExtent();
-      if (extent) {
-        mapObj.current.getView().fit(extent, {
-          padding: [50, 50, 50, 50],
-          maxZoom: 16,
-        });
-      }
     }
   }, [dailyRecapsData]);
 
@@ -445,6 +478,7 @@ const MapComponent: React.FC = () => {
 
   const refreshData = () => {
     fetchDailyRecapsData();
+    fetchStats();
   };
 
   const closePopup = () => {
@@ -456,7 +490,6 @@ const MapComponent: React.FC = () => {
   const formatPropertyValue = (key: string, value: any): string => {
     if (value === null || value === undefined) return 'N/A';
 
-    // Handle different data types
     if (typeof value === 'object') {
       try {
         return JSON.stringify(value, null, 2);
@@ -465,7 +498,6 @@ const MapComponent: React.FC = () => {
       }
     }
 
-    // Format coordinates
     if (
       key.toLowerCase().includes('coord') ||
       key.toLowerCase().includes('lat') ||
@@ -477,7 +509,6 @@ const MapComponent: React.FC = () => {
       }
     }
 
-    // Format dates
     if (
       key.toLowerCase().includes('date') ||
       key.toLowerCase().includes('time')
@@ -485,7 +516,7 @@ const MapComponent: React.FC = () => {
       try {
         const date = new Date(value);
         if (!isNaN(date.getTime())) {
-          return date.toLocaleString();
+          return date.toLocaleDateString();
         }
       } catch {
         // Continue to default formatting
@@ -499,81 +530,99 @@ const MapComponent: React.FC = () => {
     return key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
   };
 
-  // Function to render data cards for the selected feature
-  const renderDataCards = () => {
-    if (!selectedFeature) return null;
+  const getMoodEmoji = (mood: number): string => {
+    const moodMap: { [key: number]: string } = {
+      0: '😩',
+      1: '😐',
+      2: '🙂',
+      3: '😄',
+      4: '😍',
+    };
+    return moodMap[mood] || '😐';
+  };
 
-    const recap = selectedFeature.properties;
-    const metrics = [
+  // Stats Cards Component
+  const StatsCards = () => {
+    const cardData = [
       {
-        title: 'Cycling Metrics',
-        items: [
-          { label: 'Distance Covered (km)', value: recap.distance_covered },
-          { label: 'Average Speed (km/h)', value: recap.average_speed },
-          { label: 'Cycling Hours', value: recap.cycling_hours },
-          { label: 'Elevation Gains', value: recap.elevation_gains },
-          { label: 'Road Quality (1-5)', value: recap.road_quality },
-        ],
+        title: 'Distance Covered',
+        value: stats?.total_distance
+          ? `${stats.total_distance.toFixed(1)} km`
+          : '0 km',
+        icon: '🚴‍♂️',
+        color: 'bg-blue-500',
       },
       {
-        title: 'Community Engagement',
-        items: [
-          { label: 'People Interacted', value: recap.total_people_interacted },
-          { label: 'Community Events', value: recap.community_events },
-          { label: 'Women Reached', value: recap.women_reached },
-          { label: 'Youth Reached', value: recap.youth_reached },
-          { label: 'Marginalized Persons', value: recap.marginalized_persons },
-          {
-            label: 'Feedback Score (1-5)',
-            value: recap.community_feedback_score,
-          },
-        ],
+        title: 'Average Speed',
+        value: stats?.avg_speed
+          ? `${stats.avg_speed.toFixed(1)} km/h`
+          : '0 km/h',
+        icon: '⚡',
+        color: 'bg-green-500',
       },
       {
-        title: 'Climate Messaging',
-        items: [
-          { label: 'Climate Messages', value: recap.climate_messages },
-          {
-            label: 'Public Messaging Reach',
-            value: recap.public_messaging_reach,
-          },
-          { label: 'Audience Questions', value: recap.audience_questions },
-        ],
+        title: 'People Reached',
+        value: stats?.total_people_reached || 0,
+        icon: '👥',
+        color: 'bg-purple-500',
       },
       {
-        title: 'Equipment & Logistics',
-        items: [
-          {
-            label: 'Breakdowns Encountered',
-            value: recap.breakdowns_encountered,
-          },
-          { label: 'Number of Breakdowns', value: recap.number_of_breakdowns },
-          { label: 'Charging Stops', value: recap.charging_stops },
-        ],
+        title: 'Women Reached',
+        value: stats?.total_women_reached || 0,
+        icon: '👩',
+        color: 'bg-pink-500',
+      },
+      {
+        title: 'Youth Reached',
+        value: stats?.total_youth_reached || 0,
+        icon: '🧑‍🎓',
+        color: 'bg-yellow-500',
+      },
+      {
+        title: 'Road Quality',
+        value: stats?.avg_road_quality
+          ? `${stats.avg_road_quality.toFixed(1)}/5`
+          : '0/5',
+        icon: '🛣️',
+        color: 'bg-orange-500',
+      },
+      {
+        title: 'Team Mood',
+        value: stats?.avg_team_mood
+          ? getMoodEmoji(Math.round(stats.avg_team_mood))
+          : '😐',
+        icon: '🎭',
+        color: 'bg-indigo-500',
+      },
+      {
+        title: 'Total Recaps',
+        value: stats?.total_recaps || 0,
+        icon: '📝',
+        color: 'bg-red-500',
       },
     ];
 
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-        {metrics.map((metric, index) => (
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        {cardData.map((card, index) => (
           <div
             key={index}
-            className="bg-white dark:bg-gray-800 rounded-lg shadow p-4"
+            className="bg-white rounded-lg shadow-md p-4 border border-gray-200 dark:bg-boxdark dark:border-strokedark"
           >
-            <h4 className="font-bold text-lg mb-2 text-blue-600 dark:text-blue-400">
-              {metric.title}
-            </h4>
-            <div className="space-y-2">
-              {metric.items.map((item, idx) => (
-                <div key={idx} className="flex justify-between">
-                  <span className="text-gray-600 dark:text-gray-300">
-                    {item.label}:
-                  </span>
-                  <span className="font-medium text-gray-800 dark:text-gray-100">
-                    {item.value || 'N/A'}
-                  </span>
-                </div>
-              ))}
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                  {card.title}
+                </p>
+                <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                  {card.value}
+                </p>
+              </div>
+              <div
+                className={`${card.color} text-white p-3 rounded-full text-xl`}
+              >
+                {card.icon}
+              </div>
             </div>
           </div>
         ))}
@@ -583,14 +632,13 @@ const MapComponent: React.FC = () => {
 
   return (
     <>
-      <Breadcrumb pageName="Activities" />
+      <Breadcrumb pageName="Daily Recaps Map" />
 
       <div className="rounded-sm border border-stroke bg-white p-4 shadow-default dark:border-strokedark dark:bg-boxdark md:p-6 xl:p-9">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-4">
             <h2 className="text-xl font-semibold text-black dark:text-white">
-              Route Map: From DayStar Nairobi Campus, Valley Road to DayStar
-              Main Campus Athiriver
+              Daily Recaps Tracking Map
             </h2>
             {isDailyRecapsLoading && (
               <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
@@ -600,7 +648,7 @@ const MapComponent: React.FC = () => {
             )}
             {dailyRecapsData.length > 0 && !isDailyRecapsLoading && (
               <div className="text-sm text-green-600 dark:text-green-400">
-                {dailyRecapsData.length} locations loaded
+                {dailyRecapsData.length} recaps loaded
               </div>
             )}
           </div>
@@ -612,6 +660,16 @@ const MapComponent: React.FC = () => {
             {isDailyRecapsLoading ? 'Loading...' : 'Refresh Data'}
           </button>
         </div>
+
+        {/* Stats Cards */}
+        <StatsCards />
+
+        {/* Error Display */}
+        {dailyRecapsError && (
+          <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
+            Error: {dailyRecapsError}
+          </div>
+        )}
       </div>
 
       <div
@@ -725,7 +783,6 @@ const MapComponent: React.FC = () => {
                   Data Layers
                 </h4>
 
-                {/* Daily Recaps Layer */}
                 <div style={{ marginBottom: '8px' }}>
                   <label
                     style={{
@@ -759,7 +816,7 @@ const MapComponent: React.FC = () => {
                 <div style={{ marginTop: '10px', fontSize: '12px' }}>
                   {dailyRecapsError && (
                     <div style={{ color: '#dc2626', marginBottom: '5px' }}>
-                      Daily Recaps Error: {dailyRecapsError}
+                      Error: {dailyRecapsError}
                     </div>
                   )}
                   {dailyRecapsLoaded && (
@@ -793,8 +850,8 @@ const MapComponent: React.FC = () => {
             borderRadius: '8px',
             padding: '16px',
             minWidth: '300px',
-            maxWidth: '600px',
-            maxHeight: '80vh',
+            maxWidth: '400px',
+            maxHeight: '60vh',
             overflowY: 'auto',
             boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
             fontSize: '14px',
@@ -819,23 +876,15 @@ const MapComponent: React.FC = () => {
                     style={{
                       margin: 0,
                       color: '#1f2937',
-                      fontSize: '18px',
+                      fontSize: '16px',
                       fontWeight: '600',
                       maxWidth: '250px',
                       wordBreak: 'break-word',
                     }}
                   >
-                    {selectedFeature.properties.date} -{' '}
-                    {selectedFeature.properties.country}
+                    {selectedFeature.properties.country} -{' '}
+                    {selectedFeature.properties.date}
                   </h3>
-                  <div
-                    style={{
-                      fontSize: '24px',
-                      marginTop: '4px',
-                    }}
-                  >
-                    {selectedFeature.properties.mood_emoji}
-                  </div>
                   <div
                     style={{
                       fontSize: '12px',
@@ -889,8 +938,321 @@ const MapComponent: React.FC = () => {
                 {selectedFeature.coordinates[0].toFixed(6)}
               </div>
 
-              {/* Data Cards */}
-              {renderDataCards()}
+              {/* Key Metrics */}
+              <div style={{ marginBottom: '16px' }}>
+                <h4
+                  style={{
+                    margin: '0 0 8px 0',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                  }}
+                >
+                  Key Metrics
+                </h4>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '8px',
+                  }}
+                >
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Distance:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.distance_covered || 'N/A'} km
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Speed:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.average_speed || 'N/A'} km/h
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Cycling Hours:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.cycling_hours || 'N/A'} h
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Road Quality:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.road_quality || 'N/A'}/5
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Community Engagement */}
+              <div style={{ marginBottom: '16px' }}>
+                <h4
+                  style={{
+                    margin: '0 0 8px 0',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                  }}
+                >
+                  Community Engagement
+                </h4>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '8px',
+                  }}
+                >
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      People Reached:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.total_people_interacted ||
+                        'N/A'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Women Reached:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.women_reached || 'N/A'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Youth Reached:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.youth_reached || 'N/A'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Events:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.community_events || 'N/A'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Climate & Awareness */}
+              <div style={{ marginBottom: '16px' }}>
+                <h4
+                  style={{
+                    margin: '0 0 8px 0',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                  }}
+                >
+                  Climate & Awareness
+                </h4>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '8px',
+                  }}
+                >
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Climate Messages:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.climate_messages || 'N/A'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Public Reach:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.public_messaging_reach ||
+                        'N/A'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Questions:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.audience_questions || 'N/A'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Feedback Score:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.community_feedback_score ||
+                        'N/A'}
+                      /5
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Team Status */}
+              <div style={{ marginBottom: '16px' }}>
+                <h4
+                  style={{
+                    margin: '0 0 8px 0',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                  }}
+                >
+                  Team Status
+                </h4>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '8px',
+                  }}
+                >
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Riders:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.riders_today || 'N/A'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Team Mood:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937', fontSize: '16px' }}>
+                      {selectedFeature.properties.team_mood !== undefined
+                        ? getMoodEmoji(selectedFeature.properties.team_mood)
+                        : '😐'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Health Score:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.team_health_score || 'N/A'}/5
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px' }}>
+                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                      Breakdowns:
+                    </span>
+                    <br />
+                    <span style={{ color: '#1f2937' }}>
+                      {selectedFeature.properties.breakdowns_encountered || 0}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Additional Details */}
+              <div>
+                <h4
+                  style={{
+                    margin: '0 0 8px 0',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                  }}
+                >
+                  Additional Details
+                </h4>
+                {Object.entries(selectedFeature.properties)
+                  .filter(
+                    ([key, value]) =>
+                      ![
+                        'date',
+                        'country',
+                        'latitude',
+                        'longitude',
+                        'originalIndex',
+                        'distance_covered',
+                        'average_speed',
+                        'cycling_hours',
+                        'road_quality',
+                        'total_people_interacted',
+                        'women_reached',
+                        'youth_reached',
+                        'community_events',
+                        'climate_messages',
+                        'public_messaging_reach',
+                        'audience_questions',
+                        'community_feedback_score',
+                        'riders_today',
+                        'team_mood',
+                        'team_health_score',
+                        'breakdowns_encountered',
+                      ].includes(key) &&
+                      value !== null &&
+                      value !== undefined &&
+                      value !== '',
+                  )
+                  .slice(0, 5) // Limit to 5 additional properties
+                  .map(([key, value]) => (
+                    <div
+                      key={key}
+                      style={{
+                        marginBottom: '8px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '2px',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontWeight: '600',
+                          color: '#374151',
+                          fontSize: '12px',
+                          textTransform: 'capitalize',
+                        }}
+                      >
+                        {formatPropertyKey(key)}:
+                      </span>
+                      <span
+                        style={{
+                          color: '#6b7280',
+                          wordBreak: 'break-word',
+                          fontSize: '13px',
+                          paddingLeft: '8px',
+                          lineHeight: '1.4',
+                        }}
+                      >
+                        {formatPropertyValue(key, value)}
+                      </span>
+                    </div>
+                  ))}
+              </div>
             </>
           )}
         </div>
