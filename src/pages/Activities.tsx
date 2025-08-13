@@ -23,7 +23,8 @@ import Overlay from 'ol/Overlay';
 import { Coordinate } from 'ol/coordinate';
 import Breadcrumb from '../components/Breadcrumbs/Breadcrumb';
 
-import routesGeoJSON from '../components/Data/Daystar_route'; // Adjust path as necessary
+import routesGeoJSON from '../components/Data/Daystar_route';
+import WaterPoints from '../components/Data/Water_Points'; // Adjust path as necessary
 
 type MapType = 'osm' | 'openstreet' | 'satellite' | 'terrain' | 'dark';
 
@@ -84,6 +85,7 @@ interface SelectedFeature {
   properties: { [key: string]: any };
   coordinates: [number, number];
   geometry: any;
+  featureType: 'dailyRecap' | 'waterPoint' | 'route' | 'location';
 }
 
 interface StatsData {
@@ -108,12 +110,15 @@ const MapComponent: React.FC = () => {
   const dailyRecapsLayerRef = useRef<VectorLayer<any> | null>(null);
   const routesSourceRef = useRef<VectorSource | null>(null);
   const routesLayerRef = useRef<VectorLayer<any> | null>(null);
+  const waterPointsSourceRef = useRef<VectorSource | null>(null);
+  const waterPointsLayerRef = useRef<VectorLayer<any> | null>(null);
   const overlayRef = useRef<Overlay | null>(null);
 
   const [currentMapType, setCurrentMapType] = useState<MapType>('osm');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showLayersMenu, setShowLayersMenu] = useState(false);
   const [showDailyRecapsLayer, setShowDailyRecapsLayer] = useState(true);
+  const [showWaterPointsLayer, setShowWaterPointsLayer] = useState(true);
   const [dailyRecapsData, setDailyRecapsData] = useState<DailyRecapData[]>([]);
   const [isDailyRecapsLoading, setIsDailyRecapsLoading] = useState(false);
   const [dailyRecapsError, setDailyRecapsError] = useState<string | null>(null);
@@ -122,8 +127,229 @@ const MapComponent: React.FC = () => {
     useState<SelectedFeature | null>(null);
   const [popupPosition, setPopupPosition] = useState<Coordinate | null>(null);
   const [stats, setStats] = useState<StatsData | null>(null);
+  const [currentPosition, setCurrentPosition] = useState<
+    [number, number] | null
+  >(null);
+  const [proximityAlerts, setProximityAlerts] = useState<Set<string>>(
+    new Set(),
+  );
+  const [isTrackingEnabled, setIsTrackingEnabled] = useState(false);
+  const watchIdRef = useRef<number | null>(null);
 
-  // Define base map sources
+  // Calculate distance between two coordinates in meters
+  const calculateDistance = (
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number,
+  ): number => {
+    const R = 6371e3; // Earth's radius in meters
+    const φ1 = (lat1 * Math.PI) / 180;
+    const φ2 = (lat2 * Math.PI) / 180;
+    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+    const a =
+      Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+  };
+
+  // Play proximity sound
+  const playProximitySound = () => {
+    try {
+      // Create audio context for web audio API
+      const audioContext = new (window.AudioContext ||
+        (window as any).webkitAudioContext)();
+
+      // Create oscillator for beep sound
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      // Set sound properties
+      oscillator.frequency.setValueAtTime(800, audioContext.currentTime); // 800Hz beep
+      oscillator.type = 'sine';
+
+      // Set volume and fade
+      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(
+        0.01,
+        audioContext.currentTime + 0.5,
+      );
+
+      // Play for 500ms
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 0.5);
+    } catch (error) {
+      console.warn('Could not play proximity sound:', error);
+      // Fallback: try to use device vibration if available
+      if (navigator.vibrate) {
+        navigator.vibrate([200, 100, 200]);
+      }
+    }
+  };
+
+  // Check proximity to water points
+  const checkWaterPointProximity = (userLat: number, userLon: number) => {
+    if (!WaterPoints || !WaterPoints.features) return;
+
+    WaterPoints.features.forEach((waterPoint, index) => {
+      const [wpLon, wpLat] = waterPoint.geometry.coordinates;
+      const distance = calculateDistance(userLat, userLon, wpLat, wpLon);
+      const waterPointId = `${waterPoint.properties.name}-${index}`;
+
+      // Check if within 5 meters
+      if (distance <= 5) {
+        // Only alert once per water point
+        if (!proximityAlerts.has(waterPointId)) {
+          console.log(
+            `Near water point: ${
+              waterPoint.properties.name
+            } (${distance.toFixed(1)}m away)`,
+          );
+          playProximitySound();
+          setProximityAlerts((prev) => new Set([...prev, waterPointId]));
+
+          // Show notification if possible
+          if (
+            'Notification' in window &&
+            Notification.permission === 'granted'
+          ) {
+            new Notification(`📍 Near ${waterPoint.properties.name}`, {
+              body: `You are ${distance.toFixed(
+                1,
+              )} meters away from this water point.`,
+              icon: '/favicon.ico',
+            });
+          }
+        }
+      } else if (distance > 10) {
+        // Reset alert when moving away (10m threshold to prevent bouncing)
+        if (proximityAlerts.has(waterPointId)) {
+          setProximityAlerts((prev) => {
+            const newSet = new Set(prev);
+            newSet.delete(waterPointId);
+            return newSet;
+          });
+        }
+      }
+    });
+  };
+
+  // Start location tracking
+  const startLocationTracking = () => {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by this browser.');
+      return;
+    }
+
+    // Request notification permission
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+
+    const options = {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 1000, // Cache position for 1 second
+    };
+
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+
+        setCurrentPosition([lon, lat]);
+        checkWaterPointProximity(lat, lon);
+
+        // Update user marker on map
+        if (vectorSourceRef.current && mapObj.current) {
+          // Clear existing user location marker
+          const features = vectorSourceRef.current.getFeatures();
+          const userMarkers = features.filter((f) => f.get('isUserLocation'));
+          userMarkers.forEach((marker) =>
+            vectorSourceRef.current!.removeFeature(marker),
+          );
+
+          // Add new user location marker
+          const coords = fromLonLat([lon, lat]);
+          const userMarker = new Feature({
+            geometry: new Point(coords),
+            isUserLocation: true,
+            featureType: 'location',
+          });
+
+          userMarker.setStyle(
+            new Style({
+              image: new CircleStyle({
+                radius: 8,
+                fill: new Fill({ color: '#4285F4' }),
+                stroke: new Stroke({ color: '#fff', width: 3 }),
+              }),
+            }),
+          );
+
+          vectorSourceRef.current.addFeature(userMarker);
+        }
+      },
+      (error) => {
+        console.error('Geolocation error:', error);
+        let errorMessage = 'Unable to get your location.';
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            errorMessage =
+              'Location access denied. Please enable location permissions.';
+            break;
+          case error.POSITION_UNAVAILABLE:
+            errorMessage = 'Location information unavailable.';
+            break;
+          case error.TIMEOUT:
+            errorMessage = 'Location request timed out.';
+            break;
+        }
+        alert(errorMessage);
+        setIsTrackingEnabled(false);
+      },
+      options,
+    );
+
+    watchIdRef.current = watchId;
+    setIsTrackingEnabled(true);
+  };
+
+  // Stop location tracking
+  const stopLocationTracking = () => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    setIsTrackingEnabled(false);
+    setCurrentPosition(null);
+    setProximityAlerts(new Set());
+
+    // Remove user location marker
+    if (vectorSourceRef.current) {
+      const features = vectorSourceRef.current.getFeatures();
+      const userMarkers = features.filter((f) => f.get('isUserLocation'));
+      userMarkers.forEach((marker) =>
+        vectorSourceRef.current!.removeFeature(marker),
+      );
+    }
+  };
+
+  // Toggle location tracking
+  const toggleLocationTracking = () => {
+    if (isTrackingEnabled) {
+      stopLocationTracking();
+    } else {
+      startLocationTracking();
+    }
+  };
   const mapSources = {
     osm: new OSM(),
     openstreet: new XYZ({
@@ -185,6 +411,37 @@ const MapComponent: React.FC = () => {
     }
   };
 
+  // Add Water Points to map
+  const addWaterPointsToMap = () => {
+    if (!WaterPoints || !mapObj.current || !waterPointsSourceRef.current)
+      return;
+
+    try {
+      const format = new GeoJSON();
+      const waterPointFeatures = format.readFeatures(WaterPoints, {
+        featureProjection: 'EPSG:3857',
+        dataProjection: 'EPSG:4326',
+      });
+
+      // Clear existing water point features
+      waterPointsSourceRef.current.clear();
+
+      // Add feature type identifier to each water point feature
+      waterPointFeatures.forEach((feature) => {
+        feature.set('featureType', 'waterPoint');
+      });
+
+      // Add water point features
+      waterPointsSourceRef.current.addFeatures(waterPointFeatures);
+
+      console.log(
+        `Added ${waterPointFeatures.length} water point features to map`,
+      );
+    } catch (err) {
+      console.error('Error adding water points to map:', err);
+    }
+  };
+
   // Add Daily Recaps data to map
   const addDailyRecapsToMap = () => {
     if (!dailyRecapsData || !mapObj.current || !dailyRecapsSourceRef.current)
@@ -206,6 +463,7 @@ const MapComponent: React.FC = () => {
             geometry: new Point(coords),
             ...recap,
             originalIndex: index,
+            featureType: 'dailyRecap',
           });
 
           return feature;
@@ -247,6 +505,7 @@ const MapComponent: React.FC = () => {
 
       // Style each route feature
       routeFeatures.forEach((feature) => {
+        feature.set('featureType', 'route');
         feature.setStyle(
           new Style({
             stroke: new Stroke({
@@ -283,6 +542,23 @@ const MapComponent: React.FC = () => {
     });
   };
 
+  // Create style for Water Points features
+  const createWaterPointsStyle = () => {
+    return new Style({
+      image: new CircleStyle({
+        radius: 10,
+        fill: new Fill({ color: '#1E90FF' }),
+        stroke: new Stroke({ color: '#fff', width: 2 }),
+      }),
+      text: new Text({
+        font: '10px Calibri,sans-serif',
+        fill: new Fill({ color: '#000' }),
+        stroke: new Stroke({ color: '#fff', width: 2 }),
+        offsetY: -25,
+      }),
+    });
+  };
+
   // Listen for fullscreen changes
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -295,12 +571,26 @@ const MapComponent: React.FC = () => {
     };
   }, []);
 
+  // Cleanup location tracking on unmount
+  useEffect(() => {
+    return () => {
+      stopLocationTracking();
+    };
+  }, []);
+
   // Toggle Daily Recaps layer visibility
   useEffect(() => {
     if (dailyRecapsLayerRef.current) {
       dailyRecapsLayerRef.current.setVisible(showDailyRecapsLayer);
     }
   }, [showDailyRecapsLayer]);
+
+  // Toggle Water Points layer visibility
+  useEffect(() => {
+    if (waterPointsLayerRef.current) {
+      waterPointsLayerRef.current.setVisible(showWaterPointsLayer);
+    }
+  }, [showWaterPointsLayer]);
 
   // Initialize map
   useEffect(() => {
@@ -332,6 +622,23 @@ const MapComponent: React.FC = () => {
         source: routesSourceRef.current,
       });
 
+      // Vector source for water points
+      waterPointsSourceRef.current = new VectorSource();
+      waterPointsLayerRef.current = new VectorLayer({
+        source: waterPointsSourceRef.current,
+        visible: showWaterPointsLayer,
+        style: (feature) => {
+          const style = createWaterPointsStyle();
+          const name = feature.get('name');
+          const type = feature.get('type');
+          const text = type || name || 'Water Point';
+          if (text) {
+            style.getText()?.setText(text.toString());
+          }
+          return style;
+        },
+      });
+
       // Create popup overlay
       overlayRef.current = new Overlay({
         element: popupRef.current,
@@ -350,6 +657,7 @@ const MapComponent: React.FC = () => {
         layers: [
           new TileLayer({ source: mapSources[currentMapType] }),
           routesLayerRef.current,
+          waterPointsLayerRef.current,
           dailyRecapsLayerRef.current,
           vectorLayerRef.current,
         ],
@@ -365,7 +673,17 @@ const MapComponent: React.FC = () => {
         const feature = mapObj.current!.forEachFeatureAtPixel(
           event.pixel,
           (feature) => {
+            // Check different layer sources to determine feature type
             if (dailyRecapsSourceRef.current?.hasFeature(feature)) {
+              return feature;
+            }
+            if (waterPointsSourceRef.current?.hasFeature(feature)) {
+              return feature;
+            }
+            if (routesSourceRef.current?.hasFeature(feature)) {
+              return feature;
+            }
+            if (vectorSourceRef.current?.hasFeature(feature)) {
               return feature;
             }
             return null;
@@ -381,6 +699,7 @@ const MapComponent: React.FC = () => {
           delete cleanProperties.geometry;
 
           let coordinates: [number, number];
+          let featureType: SelectedFeature['featureType'] = 'location';
 
           if (geometry instanceof Point) {
             const coords = geometry.getCoordinates();
@@ -389,10 +708,20 @@ const MapComponent: React.FC = () => {
             coordinates = [0, 0];
           }
 
+          // Determine feature type
+          if (dailyRecapsSourceRef.current?.hasFeature(feature)) {
+            featureType = 'dailyRecap';
+          } else if (waterPointsSourceRef.current?.hasFeature(feature)) {
+            featureType = 'waterPoint';
+          } else if (routesSourceRef.current?.hasFeature(feature)) {
+            featureType = 'route';
+          }
+
           setSelectedFeature({
             properties: cleanProperties,
             coordinates,
             geometry: geometry,
+            featureType,
           });
 
           setPopupPosition(event.coordinate);
@@ -412,6 +741,7 @@ const MapComponent: React.FC = () => {
 
             const marker = new Feature({
               geometry: new Point(coords),
+              featureType: 'location',
             });
 
             marker.setStyle(
@@ -433,6 +763,7 @@ const MapComponent: React.FC = () => {
       fetchDailyRecapsData();
       fetchStats();
       addRoutesToMap();
+      addWaterPointsToMap();
     }
 
     return () => {
@@ -539,6 +870,18 @@ const MapComponent: React.FC = () => {
       4: '😍',
     };
     return moodMap[mood] || '😐';
+  };
+
+  const getWaterPointIcon = (type: string): string => {
+    const iconMap: { [key: string]: string } = {
+      'Starting Point': '🏁',
+      Mlolongo: '💧',
+      Athiriver: '💧',
+      'Water Break': '💧',
+      'Meeting point': '🤝',
+      'Daystar university Athiriver Campus': '🏫',
+    };
+    return iconMap[type] || '💧';
   };
 
   // Stats Cards Component
@@ -697,6 +1040,26 @@ const MapComponent: React.FC = () => {
           }}
         >
           <button
+            onClick={toggleLocationTracking}
+            style={{
+              color: '#fff',
+              background: isTrackingEnabled
+                ? 'rgba(34, 197, 94, 0.8)'
+                : 'rgba(239, 68, 68, 0.8)',
+              border: '1px solid rgba(255, 255, 255, 0.3)',
+              borderRadius: '4px',
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            {isTrackingEnabled ? '📍 Stop Tracking' : '📍 Start Tracking'}
+          </button>
+
+          <button
             onClick={toggleFullscreen}
             style={{
               color: '#fff',
@@ -812,6 +1175,35 @@ const MapComponent: React.FC = () => {
                   </label>
                 </div>
 
+                <div style={{ marginBottom: '8px' }}>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      fontSize: '14px',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={showWaterPointsLayer}
+                      onChange={(e) =>
+                        setShowWaterPointsLayer(e.target.checked)
+                      }
+                    />
+                    Water Points
+                    <span
+                      style={{
+                        backgroundColor: '#1E90FF',
+                        width: '10px',
+                        height: '10px',
+                        borderRadius: '50%',
+                        border: '1px solid #fff',
+                      }}
+                    ></span>
+                  </label>
+                </div>
+
                 {/* Status Indicators */}
                 <div style={{ marginTop: '10px', fontSize: '12px' }}>
                   {dailyRecapsError && (
@@ -822,6 +1214,27 @@ const MapComponent: React.FC = () => {
                   {dailyRecapsLoaded && (
                     <div style={{ color: '#16a34a' }}>
                       ✓ Daily Recaps loaded ({dailyRecapsData.length})
+                    </div>
+                  )}
+                  <div style={{ color: '#16a34a' }}>
+                    ✓ Water Points loaded ({WaterPoints.features.length})
+                  </div>
+                  {isTrackingEnabled && (
+                    <div style={{ color: '#2563eb', marginTop: '5px' }}>
+                      📍 Location tracking active
+                      {currentPosition && (
+                        <div style={{ fontSize: '10px', marginTop: '2px' }}>
+                          Lat: {currentPosition[1].toFixed(6)}
+                          <br />
+                          Lon: {currentPosition[0].toFixed(6)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {proximityAlerts.size > 0 && (
+                    <div style={{ color: '#dc2626', marginTop: '5px' }}>
+                      🔔 Near {proximityAlerts.size} water point
+                      {proximityAlerts.size !== 1 ? 's' : ''}
                     </div>
                   )}
                 </div>
@@ -846,7 +1259,10 @@ const MapComponent: React.FC = () => {
             display: selectedFeature ? 'block' : 'none',
             position: 'absolute',
             background: 'white',
-            border: '2px solid #FF4500',
+            border:
+              selectedFeature?.featureType === 'waterPoint'
+                ? '2px solid #1E90FF'
+                : '2px solid #FF4500',
             borderRadius: '8px',
             padding: '16px',
             minWidth: '300px',
@@ -882,18 +1298,34 @@ const MapComponent: React.FC = () => {
                       wordBreak: 'break-word',
                     }}
                   >
-                    {selectedFeature.properties.country} -{' '}
-                    {selectedFeature.properties.date}
+                    {selectedFeature.featureType === 'waterPoint'
+                      ? selectedFeature.properties.name
+                      : `${selectedFeature.properties.country} - ${selectedFeature.properties.date}`}
                   </h3>
                   <div
                     style={{
                       fontSize: '12px',
-                      color: '#FF4500',
+                      color:
+                        selectedFeature.featureType === 'waterPoint'
+                          ? '#1E90FF'
+                          : '#FF4500',
                       fontWeight: '500',
                       marginTop: '2px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
                     }}
                   >
-                    Daily Recap
+                    {selectedFeature.featureType === 'waterPoint' && (
+                      <>
+                        {getWaterPointIcon(selectedFeature.properties.type)}
+                        <span>Water Point</span>
+                      </>
+                    )}
+                    {selectedFeature.featureType === 'dailyRecap' &&
+                      'Daily Recap'}
+                    {selectedFeature.featureType === 'route' && 'Route'}
+                    {selectedFeature.featureType === 'location' && 'Location'}
                   </div>
                 </div>
                 <button
@@ -938,245 +1370,309 @@ const MapComponent: React.FC = () => {
                 {selectedFeature.coordinates[0].toFixed(6)}
               </div>
 
-              {/* Key Metrics */}
-              <div style={{ marginBottom: '16px' }}>
-                <h4
-                  style={{
-                    margin: '0 0 8px 0',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    color: '#374151',
-                  }}
-                >
-                  Key Metrics
-                </h4>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: '8px',
-                  }}
-                >
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Distance:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.distance_covered || 'N/A'} km
-                    </span>
+              {/* Water Point specific content */}
+              {selectedFeature.featureType === 'waterPoint' && (
+                <>
+                  <div style={{ marginBottom: '16px' }}>
+                    <h4
+                      style={{
+                        margin: '0 0 8px 0',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        color: '#374151',
+                      }}
+                    >
+                      Water Point Details
+                    </h4>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr',
+                        gap: '8px',
+                      }}
+                    >
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          County:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.county || 'N/A'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Type:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.type || 'N/A'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Description:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.description || 'N/A'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Speed:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.average_speed || 'N/A'} km/h
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Cycling Hours:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.cycling_hours || 'N/A'} h
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Road Quality:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.road_quality || 'N/A'}/5
-                    </span>
-                  </div>
-                </div>
-              </div>
+                </>
+              )}
 
-              {/* Community Engagement */}
-              <div style={{ marginBottom: '16px' }}>
-                <h4
-                  style={{
-                    margin: '0 0 8px 0',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    color: '#374151',
-                  }}
-                >
-                  Community Engagement
-                </h4>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: '8px',
-                  }}
-                >
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      People Reached:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.total_people_interacted ||
-                        'N/A'}
-                    </span>
+              {/* Daily Recap specific content */}
+              {selectedFeature.featureType === 'dailyRecap' && (
+                <>
+                  {/* Key Metrics */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <h4
+                      style={{
+                        margin: '0 0 8px 0',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        color: '#374151',
+                      }}
+                    >
+                      Key Metrics
+                    </h4>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 1fr',
+                        gap: '8px',
+                      }}
+                    >
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Distance:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.distance_covered || 'N/A'}{' '}
+                          km
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Speed:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.average_speed || 'N/A'}{' '}
+                          km/h
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Cycling Hours:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.cycling_hours || 'N/A'} h
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Road Quality:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.road_quality || 'N/A'}/5
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Women Reached:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.women_reached || 'N/A'}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Youth Reached:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.youth_reached || 'N/A'}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Events:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.community_events || 'N/A'}
-                    </span>
-                  </div>
-                </div>
-              </div>
 
-              {/* Climate & Awareness */}
-              <div style={{ marginBottom: '16px' }}>
-                <h4
-                  style={{
-                    margin: '0 0 8px 0',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    color: '#374151',
-                  }}
-                >
-                  Climate & Awareness
-                </h4>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: '8px',
-                  }}
-                >
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Climate Messages:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.climate_messages || 'N/A'}
-                    </span>
+                  {/* Community Engagement */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <h4
+                      style={{
+                        margin: '0 0 8px 0',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        color: '#374151',
+                      }}
+                    >
+                      Community Engagement
+                    </h4>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 1fr',
+                        gap: '8px',
+                      }}
+                    >
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          People Reached:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.total_people_interacted ||
+                            'N/A'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Women Reached:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.women_reached || 'N/A'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Youth Reached:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.youth_reached || 'N/A'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Events:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.community_events || 'N/A'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Public Reach:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.public_messaging_reach ||
-                        'N/A'}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Questions:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.audience_questions || 'N/A'}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Feedback Score:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.community_feedback_score ||
-                        'N/A'}
-                      /5
-                    </span>
-                  </div>
-                </div>
-              </div>
 
-              {/* Team Status */}
-              <div style={{ marginBottom: '16px' }}>
-                <h4
-                  style={{
-                    margin: '0 0 8px 0',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    color: '#374151',
-                  }}
-                >
-                  Team Status
-                </h4>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: '8px',
-                  }}
-                >
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Riders:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.riders_today || 'N/A'}
-                    </span>
+                  {/* Climate & Awareness */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <h4
+                      style={{
+                        margin: '0 0 8px 0',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        color: '#374151',
+                      }}
+                    >
+                      Climate & Awareness
+                    </h4>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 1fr',
+                        gap: '8px',
+                      }}
+                    >
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Climate Messages:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.climate_messages || 'N/A'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Public Reach:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.public_messaging_reach ||
+                            'N/A'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Questions:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.audience_questions ||
+                            'N/A'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Feedback Score:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties
+                            .community_feedback_score || 'N/A'}
+                          /5
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Team Mood:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937', fontSize: '16px' }}>
-                      {selectedFeature.properties.team_mood !== undefined
-                        ? getMoodEmoji(selectedFeature.properties.team_mood)
-                        : '😐'}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Health Score:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.team_health_score || 'N/A'}/5
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '12px' }}>
-                    <span style={{ fontWeight: '500', color: '#6b7280' }}>
-                      Breakdowns:
-                    </span>
-                    <br />
-                    <span style={{ color: '#1f2937' }}>
-                      {selectedFeature.properties.breakdowns_encountered || 0}
-                    </span>
-                  </div>
-                </div>
-              </div>
 
-              {/* Additional Details */}
+                  {/* Team Status */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <h4
+                      style={{
+                        margin: '0 0 8px 0',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        color: '#374151',
+                      }}
+                    >
+                      Team Status
+                    </h4>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 1fr',
+                        gap: '8px',
+                      }}
+                    >
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Riders:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.riders_today || 'N/A'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Team Mood:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937', fontSize: '16px' }}>
+                          {selectedFeature.properties.team_mood !== undefined
+                            ? getMoodEmoji(selectedFeature.properties.team_mood)
+                            : '😐'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Health Score:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.team_health_score ||
+                            'N/A'}
+                          /5
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px' }}>
+                        <span style={{ fontWeight: '500', color: '#6b7280' }}>
+                          Breakdowns:
+                        </span>
+                        <br />
+                        <span style={{ color: '#1f2937' }}>
+                          {selectedFeature.properties.breakdowns_encountered ||
+                            0}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Additional Details for all feature types */}
               <div>
                 <h4
                   style={{
@@ -1189,35 +1685,51 @@ const MapComponent: React.FC = () => {
                   Additional Details
                 </h4>
                 {Object.entries(selectedFeature.properties)
-                  .filter(
-                    ([key, value]) =>
-                      ![
-                        'date',
-                        'country',
-                        'latitude',
-                        'longitude',
-                        'originalIndex',
-                        'distance_covered',
-                        'average_speed',
-                        'cycling_hours',
-                        'road_quality',
-                        'total_people_interacted',
-                        'women_reached',
-                        'youth_reached',
-                        'community_events',
-                        'climate_messages',
-                        'public_messaging_reach',
-                        'audience_questions',
-                        'community_feedback_score',
-                        'riders_today',
-                        'team_mood',
-                        'team_health_score',
-                        'breakdowns_encountered',
-                      ].includes(key) &&
+                  .filter(([key, value]) => {
+                    // Filter out keys already displayed and common system keys
+                    const excludedKeys =
+                      selectedFeature.featureType === 'dailyRecap'
+                        ? [
+                            'date',
+                            'country',
+                            'latitude',
+                            'longitude',
+                            'originalIndex',
+                            'distance_covered',
+                            'average_speed',
+                            'cycling_hours',
+                            'road_quality',
+                            'total_people_interacted',
+                            'women_reached',
+                            'youth_reached',
+                            'community_events',
+                            'climate_messages',
+                            'public_messaging_reach',
+                            'audience_questions',
+                            'community_feedback_score',
+                            'riders_today',
+                            'team_mood',
+                            'team_health_score',
+                            'breakdowns_encountered',
+                            'featureType',
+                          ]
+                        : selectedFeature.featureType === 'waterPoint'
+                        ? [
+                            'name',
+                            'county',
+                            'type',
+                            'description',
+                            'featureType',
+                          ]
+                        : ['featureType'];
+
+                    return (
+                      !excludedKeys.includes(key) &&
                       value !== null &&
                       value !== undefined &&
-                      value !== '',
-                  )
+                      value !== ''
+                    );
+                  })
                   .slice(0, 5) // Limit to 5 additional properties
                   .map(([key, value]) => (
                     <div
