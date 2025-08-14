@@ -14,7 +14,7 @@ const WaterPoints = {
         type: 'Starting Point',
         description: 'Flag-off ceremony,',
       },
-      geometry: { type: 'Point', coordinates: [36.8041119, -1.295877] },
+      geometry: { type: 'Point', coordinates: [36.8013499, -1.2965247] },
     },
     {
       type: 'Feature',
