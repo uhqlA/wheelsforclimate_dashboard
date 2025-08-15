@@ -47,7 +47,7 @@ function App() {
           path="/geostories"
           element={
             <>
-              <PageTitle title="geostories" />
+              <PageTitle title="Geostories" />
               <Geostories />
             </>
           }
