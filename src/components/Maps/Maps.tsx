@@ -54,6 +54,11 @@ const MapComponent: React.FC = () => {
   const countyRoutesLayerRef = useRef<VectorLayer<any> | null>(null);
   const overlayRef = useRef<Overlay | null>(null);
 
+  // New refs for geolocation tracking
+  const geolocationWatchIdRef = useRef<number | null>(null);
+  const currentLocationFeatureRef = useRef<Feature | null>(null);
+  const accuracyFeatureRef = useRef<Feature | null>(null);
+
   const [currentMapType, setCurrentMapType] = useState<MapType>('osm');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showLayersMenu, setShowLayersMenu] = useState(false);
@@ -65,7 +70,16 @@ const MapComponent: React.FC = () => {
   const [apiDataLoaded, setApiDataLoaded] = useState(false);
   const [selectedFeature, setSelectedFeature] =
     useState<SelectedFeature | null>(null);
-  // const [popupPosition, setPopupPosition] = useState<Coordinate | null>(null);
+  const [popupPosition, setPopupPosition] = useState<Coordinate | null>(null);
+
+  // New states for geolocation
+  const [isTrackingLocation, setIsTrackingLocation] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [currentLocation, setCurrentLocation] = useState<{
+    lat: number;
+    lon: number;
+    accuracy: number;
+  } | null>(null);
 
   // Define base map sources
   const mapSources = {
@@ -272,6 +286,163 @@ const MapComponent: React.FC = () => {
     });
   };
 
+  // NEW: Start location tracking
+  const startLocationTracking = () => {
+    if (!navigator.geolocation) {
+      setLocationError('Geolocation is not supported by this browser.');
+      return;
+    }
+
+    setLocationError(null);
+    setIsTrackingLocation(true);
+
+    const options = {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 1000, // Allow cached position for 1 second
+    };
+
+    const success = (position: GeolocationPosition) => {
+      const { latitude, longitude, accuracy } = position.coords;
+      const coords = fromLonLat([longitude, latitude]);
+
+      // Update current location state
+      setCurrentLocation({
+        lat: latitude,
+        lon: longitude,
+        accuracy: accuracy,
+      });
+
+      if (!vectorSourceRef.current) return;
+
+      // Remove existing location features
+      if (currentLocationFeatureRef.current) {
+        vectorSourceRef.current.removeFeature(
+          currentLocationFeatureRef.current,
+        );
+      }
+      if (accuracyFeatureRef.current) {
+        vectorSourceRef.current.removeFeature(accuracyFeatureRef.current);
+      }
+
+      // Create accuracy circle (shows GPS accuracy radius)
+      const accuracyFeature = new Feature({
+        geometry: new Point(coords),
+        type: 'accuracy',
+      });
+
+      accuracyFeature.setStyle(
+        new Style({
+          image: new CircleStyle({
+            radius: Math.min(accuracy / 10, 50), // Scale accuracy to pixel radius
+            fill: new Fill({
+              color: 'rgba(59, 130, 246, 0.1)', // Light blue with transparency
+            }),
+            stroke: new Stroke({
+              color: 'rgba(59, 130, 246, 0.3)',
+              width: 1,
+            }),
+          }),
+        }),
+      );
+
+      // Create current location marker
+      const locationFeature = new Feature({
+        geometry: new Point(coords),
+        type: 'currentLocation',
+        accuracy: accuracy,
+        timestamp: new Date().toISOString(),
+      });
+
+      locationFeature.setStyle(
+        new Style({
+          image: new CircleStyle({
+            radius: 8,
+            fill: new Fill({ color: '#3b82f6' }), // Blue color
+            stroke: new Stroke({ color: '#ffffff', width: 3 }),
+          }),
+        }),
+      );
+
+      // Add features to map
+      vectorSourceRef.current.addFeature(accuracyFeature);
+      vectorSourceRef.current.addFeature(locationFeature);
+
+      // Store references
+      accuracyFeatureRef.current = accuracyFeature;
+      currentLocationFeatureRef.current = locationFeature;
+
+      console.log(
+        `Location updated: ${latitude.toFixed(6)}, ${longitude.toFixed(
+          6,
+        )} (±${accuracy.toFixed(0)}m)`,
+      );
+    };
+
+    const error = (err: GeolocationPositionError) => {
+      let errorMessage = 'Unknown location error';
+      switch (err.code) {
+        case err.PERMISSION_DENIED:
+          errorMessage = 'Location access denied by user';
+          break;
+        case err.POSITION_UNAVAILABLE:
+          errorMessage = 'Location information unavailable';
+          break;
+        case err.TIMEOUT:
+          errorMessage = 'Location request timed out';
+          break;
+      }
+      setLocationError(errorMessage);
+      console.error('Geolocation error:', errorMessage);
+    };
+
+    // Start watching position
+    const watchId = navigator.geolocation.watchPosition(
+      success,
+      error,
+      options,
+    );
+    geolocationWatchIdRef.current = watchId;
+  };
+
+  // NEW: Stop location tracking
+  const stopLocationTracking = () => {
+    if (geolocationWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(geolocationWatchIdRef.current);
+      geolocationWatchIdRef.current = null;
+    }
+
+    // Remove location features from map
+    if (vectorSourceRef.current) {
+      if (currentLocationFeatureRef.current) {
+        vectorSourceRef.current.removeFeature(
+          currentLocationFeatureRef.current,
+        );
+        currentLocationFeatureRef.current = null;
+      }
+      if (accuracyFeatureRef.current) {
+        vectorSourceRef.current.removeFeature(accuracyFeatureRef.current);
+        accuracyFeatureRef.current = null;
+      }
+    }
+
+    setIsTrackingLocation(false);
+    setCurrentLocation(null);
+    setLocationError(null);
+  };
+
+  // NEW: Center map on current location
+  const centerOnCurrentLocation = () => {
+    if (currentLocation && mapObj.current) {
+      const coords = fromLonLat([currentLocation.lon, currentLocation.lat]);
+      mapObj.current.getView().animate({
+        center: coords,
+        zoom: 17,
+        duration: 1000,
+      });
+    }
+  };
+
   // Listen for fullscreen changes
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -290,6 +461,15 @@ const MapComponent: React.FC = () => {
       geoJsonLayerRef.current.setVisible(showApiLayer);
     }
   }, [showApiLayer]);
+
+  // Clean up geolocation on unmount
+  useEffect(() => {
+    return () => {
+      if (geolocationWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(geolocationWatchIdRef.current);
+      }
+    };
+  }, []);
 
   // Initialize map
   useEffect(() => {
@@ -362,7 +542,13 @@ const MapComponent: React.FC = () => {
         const feature = mapObj.current!.forEachFeatureAtPixel(
           event.pixel,
           (feature) => {
-            // Handle GeoJSON features and county routes features
+            // Handle GeoJSON features and county routes features, but not current location
+            if (
+              feature.get('type') === 'currentLocation' ||
+              feature.get('type') === 'accuracy'
+            ) {
+              return null;
+            }
             if (
               geoJsonSourceRef.current?.hasFeature(feature) ||
               countyRoutesSourceRef.current?.hasFeature(feature)
@@ -404,7 +590,7 @@ const MapComponent: React.FC = () => {
         }
       });
 
-      // Request current location
+      // Request current location (one-time)
       if (navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
           (position) => {
@@ -414,6 +600,7 @@ const MapComponent: React.FC = () => {
 
             const marker = new Feature({
               geometry: new Point(coords),
+              type: 'initialLocation',
             });
 
             marker.setStyle(
@@ -569,14 +756,64 @@ const MapComponent: React.FC = () => {
               </div>
             )}
           </div>
-          <button
-            onClick={refreshData}
-            className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md text-sm transition-colors"
-            disabled={isLoading}
-          >
-            {isLoading ? 'Loading...' : 'Refresh Data'}
-          </button>
+          <div className="flex items-center gap-2">
+            {/* NEW: Location tracking controls */}
+            {!isTrackingLocation ? (
+              <button
+                onClick={startLocationTracking}
+                className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-md text-sm transition-colors"
+              >
+                Start Tracking
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={centerOnCurrentLocation}
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md text-sm transition-colors"
+                  disabled={!currentLocation}
+                >
+                  Center on Me
+                </button>
+                <button
+                  onClick={stopLocationTracking}
+                  className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-md text-sm transition-colors"
+                >
+                  Stop Tracking
+                </button>
+              </>
+            )}
+            <button
+              onClick={refreshData}
+              className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md text-sm transition-colors"
+              disabled={isLoading}
+            >
+              {isLoading ? 'Loading...' : 'Refresh Data'}
+            </button>
+          </div>
         </div>
+
+        {/* NEW: Location status display */}
+        {(isTrackingLocation || locationError || currentLocation) && (
+          <div className="mb-4 p-3 rounded-md border">
+            {isTrackingLocation && currentLocation && (
+              <div className="text-sm text-green-600 dark:text-green-400">
+                📍 Location: {currentLocation.lat.toFixed(6)},{' '}
+                {currentLocation.lon.toFixed(6)}
+                (±{currentLocation.accuracy.toFixed(0)}m accuracy)
+              </div>
+            )}
+            {isTrackingLocation && !currentLocation && (
+              <div className="text-sm text-blue-600 dark:text-blue-400">
+                🔍 Searching for your location...
+              </div>
+            )}
+            {locationError && (
+              <div className="text-sm text-red-600 dark:text-red-400">
+                ⚠️ Location Error: {locationError}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div
@@ -842,6 +1079,9 @@ const MapComponent: React.FC = () => {
                       key !== 'name' &&
                       key !== 'title' &&
                       key !== 'label' &&
+                      key !== 'type' &&
+                      key !== 'accuracy' &&
+                      key !== 'timestamp' &&
                       value !== null &&
                       value !== undefined &&
                       value !== '',
@@ -885,6 +1125,9 @@ const MapComponent: React.FC = () => {
                     key !== 'name' &&
                     key !== 'title' &&
                     key !== 'label' &&
+                    key !== 'type' &&
+                    key !== 'accuracy' &&
+                    key !== 'timestamp' &&
                     selectedFeature.properties[key] !== null &&
                     selectedFeature.properties[key] !== undefined &&
                     selectedFeature.properties[key] !== '',
